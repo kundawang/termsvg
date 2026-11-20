@@ -105,9 +105,14 @@ func (c *canvas) documentSections(content *preparedContent) []docSection {
 	for index := range c.plan.layers {
 		sections = append(sections, docSection{write: func(w io.Writer) { c.writeLayer(w, index) }})
 	}
-	return append(sections,
+	sections = append(sections,
 		docSection{write: at(func() { c.writeContent(content) }), bytes: &content.cost.active},
 		docSection{write: at(c.writeCursor)},
+	)
+	for index := range c.rec.Annotations {
+		sections = append(sections, docSection{write: func(w io.Writer) { c.writeAnnotation(w, index) }})
+	}
+	return append(sections,
 		text(`</g></svg>`),
 	)
 }
@@ -186,12 +191,18 @@ func (c *canvas) writeStyles(content *preparedContent) {
 		for index := range c.plan.layers {
 			sb.WriteString(c.generateLayerKeyframes(index))
 		}
+		for index := range c.rec.Annotations {
+			sb.WriteString(c.generateAnnotationKeyframes(index))
+		}
 	}
 	if c.plan.cursorEverVisible {
 		sb.WriteString("@keyframes blink{0%,50%{opacity:1}50.01%,100%{opacity:0}}")
 	}
 
 	c.writePaintStyles(&sb)
+	if len(c.rec.Annotations) > 0 {
+		sb.WriteString(c.annotationStyleRules())
+	}
 
 	sb.WriteString("</style>")
 	fmt.Fprint(c.w, sb.String())

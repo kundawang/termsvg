@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mrmarble/termsvg/internal/annotate"
 	"github.com/mrmarble/termsvg/internal/asciicast"
 	"github.com/mrmarble/termsvg/internal/color"
 	"github.com/mrmarble/termsvg/internal/progress"
@@ -22,6 +23,11 @@ type ProcessorConfig struct {
 	Speed         float64                // Playback speed multiplier (1.0 = normal)
 	Compress      bool                   // Merge events with same timestamp
 	ProgressCh    chan<- progress.Update // Channel for progress updates (optional)
+
+	// Annotations is the annotation track in recording time. Process maps it
+	// onto the playback timeline with the same speed and idle-cap
+	// transformation as the events.
+	Annotations []annotate.Annotation
 }
 
 // Processor transforms an asciicast into IR.
@@ -62,7 +68,7 @@ func (p *Processor) Process(cast *asciicast.Cast) (*Recording, error) {
 		return nil, fmt.Errorf("invalid terminal size %dx%d: %w", cast.Header.Width, cast.Header.Height, err)
 	}
 
-	events := p.preprocessEvents(cast)
+	events, mapTime := p.preprocessEvents(cast)
 	if !hasOutput(events) {
 		return nil, errors.New("recording has no output events")
 	}
@@ -90,12 +96,13 @@ func (p *Processor) Process(cast *asciicast.Cast) (*Recording, error) {
 	assignDisplayDelays(frames, duration)
 
 	return &Recording{
-		Width:    canvas.cols,
-		Height:   canvas.rows,
-		Duration: duration,
-		Frames:   frames,
-		Colors:   catalog,
-		Stats:    stats,
+		Width:       canvas.cols,
+		Height:      canvas.rows,
+		Duration:    duration,
+		Frames:      frames,
+		Colors:      catalog,
+		Annotations: annotate.Remap(p.config.Annotations, mapTime),
+		Stats:       stats,
 	}, nil
 }
 
@@ -270,8 +277,11 @@ func (p *Processor) cellToAttrs(
 	}
 }
 
-// preprocessEvents applies timing adjustments and compression.
-func (p *Processor) preprocessEvents(cast *asciicast.Cast) []asciicast.Event {
+// preprocessEvents applies timing adjustments and compression. It also
+// returns a function mapping recording times (seconds) onto the processed
+// timeline, so annotation times follow the same speed and idle-cap
+// transformation as the events.
+func (p *Processor) preprocessEvents(cast *asciicast.Cast) ([]asciicast.Event, func(float64) float64) {
 	// Only output and resize events affect the screen: input, markers, exit
 	// statuses and unknown codes carry data that is not terminal output. The
 	// events are copied so the cast is not mutated.
@@ -288,6 +298,8 @@ func (p *Processor) preprocessEvents(cast *asciicast.Cast) []asciicast.Event {
 		}
 	}
 
+	orig := eventTimes(events)
+
 	// Keep the legacy O(n²) update order to preserve exact float64 rounding.
 	// Replace it only with a bit-exact linear algorithm if large casts become slow.
 	if p.config.IdleTimeLimit > 0 {
@@ -303,6 +315,15 @@ func (p *Processor) preprocessEvents(cast *asciicast.Cast) []asciicast.Event {
 			}
 			prev = events[i].Time
 		}
+	}
+
+	mapTime := annotate.MapTimeline(orig, eventTimes(events))
+	if p.config.Speed != 1.0 && p.config.Speed > 0 {
+		// The orig snapshot is already speed-adjusted, so recording times must
+		// be scaled before they can be looked up in it.
+		speed := p.config.Speed
+		inner := mapTime
+		mapTime = func(t float64) float64 { return inner(t / speed) }
 	}
 
 	if p.config.Compress {
@@ -324,7 +345,15 @@ func (p *Processor) preprocessEvents(cast *asciicast.Cast) []asciicast.Event {
 		events = compressed
 	}
 
-	return events
+	return events, mapTime
+}
+
+func eventTimes(events []asciicast.Event) []float64 {
+	times := make([]float64, len(events))
+	for i, event := range events {
+		times[i] = event.Time
+	}
+	return times
 }
 
 func floatSecondsToDuration(seconds float64) time.Duration {

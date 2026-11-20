@@ -99,6 +99,7 @@ Available options:
 
 - `-i, --max-idle=<duration>` - Cap idle time between events, e.g. `500ms` or `2s`. Defaults to the recording's own `idle_time_limit`, if it has one
 - `-s, --speed=<factor>` - Playback speed (can be fractional)
+- `--annotate=<file>` - Overlay a JSON annotation track during playback (see [Annotations](#annotations))
 
 > For the best playback experience it is recommended to run `termsvg play` in
 > a terminal of dimensions not smaller than the one used for recording, as
@@ -122,6 +123,7 @@ Available options:
 
 - `-o, --output=<file>` - Output file to be created. Defaults to [input].[format]
 - `-f, --format=svg|gif|webm` - Output format (default `svg`). WebM needs [ffmpeg](https://ffmpeg.org) with `libvpx-vp9`
+- `--annotate=<file>` - Draw a JSON annotation track over the export (SVG only, see [Annotations](#annotations))
 - `--system-fonts` - Draw glyphs the embedded fonts lack with fonts installed on this machine (GIF and WebM only, see [Fonts in GIF and WebM](#fonts-in-gif-and-webm))
 - `-m, --minify` - Minify svg using [Minify](https://github.com/tdewolff/minify)
 - `-s, --speed=<factor>` - Playback speed multiplier (can be fractional)
@@ -148,6 +150,39 @@ boundary, but it does not isolate inline SVG from host-page CSS. Standalone,
 neutral-inline, broad-host-rule, `<img>`, and `<object>` fixtures are in
 [`internal/renderer/svg/testdata/browser`](internal/renderer/svg/testdata/browser).
 They are embedding checks, not a Safari performance claim.
+
+### Annotations
+
+`play` and `export --format=svg` accept an annotation track with `--annotate=<file>`:
+text notes that highlight a rectangle of terminal cells during a recording-time
+interval. Use it to point at a key command or its output in a tutorial.
+
+```json
+[
+  {"from": "1.5s", "to": "4s", "row": 3, "col": 0, "rows": 1, "cols": 14, "text": "runs the build"},
+  {"from": 5, "to": 6.5, "row": 7, "col": 2, "cols": 0}
+]
+```
+
+- `from`/`to` (required) - the interval the annotation is visible, as a duration
+  string (`"1.5s"`, `200ms`) or seconds as a number. The times follow `--speed`
+  and `--max-idle` like the recording itself.
+- `row`/`col` - 0-based top-left cell of the highlight, in screen cells at
+  display time. The highlight is an overlay drawn with the same cell geometry
+  as the content, so it stays aligned through scrolling, resizes and wide
+  characters, and the recorded frames are never modified.
+- `rows`/`cols` - highlight size in cells. `rows` defaults to 1; `cols` of 0 or
+  less means "to the right edge".
+- `text` - label shown next to the highlight. Empty or missing draws only the
+  highlight.
+
+Edge cases are explicit: overlapping intervals are allowed and drawn in file
+order; rectangles reaching past the screen are clamped and fully out-of-bounds
+ones are dropped with a warning; an interval ending past the recording is
+clamped and one starting after it is dropped with a warning; empty or reversed
+intervals (`to <= from`), negative times and tracks over 128 entries are
+errors. GIF and WebM exports ignore annotations (with a warning); recordings
+without a track render exactly as before.
 
 ### Fonts in GIF and WebM
 

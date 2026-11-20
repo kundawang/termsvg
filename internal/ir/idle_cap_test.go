@@ -26,7 +26,7 @@ func TestPreprocessEvents_IdleCapKeepsFloatRounding(t *testing.T) {
 	config.Compress = false
 	config.IdleTimeLimit = 20 * time.Millisecond
 
-	got := NewProcessor(config).preprocessEvents(cast)
+	got, _ := NewProcessor(config).preprocessEvents(cast)
 
 	wantLast := math.Nextafter(0.05, 0)
 	if math.Float64bits(got[2].Time) != math.Float64bits(wantLast) {
@@ -42,7 +42,7 @@ func TestPreprocessEvents_CompressMergesEventsAtTheSameInstant(t *testing.T) {
 	config := DefaultProcessorConfig()
 	config.IdleTimeLimit = 30 * time.Millisecond
 
-	got := NewProcessor(config).preprocessEvents(cast)
+	got, _ := NewProcessor(config).preprocessEvents(cast)
 
 	if len(got) != 6 || got[len(got)-1].EventData != "fg" {
 		t.Fatalf("events = %#v, want six events ending in merged data %q", got, "fg")

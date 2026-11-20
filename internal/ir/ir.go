@@ -6,6 +6,7 @@ package ir
 import (
 	"time"
 
+	"github.com/mrmarble/termsvg/internal/annotate"
 	"github.com/mrmarble/termsvg/internal/color"
 )
 
@@ -17,6 +18,10 @@ type Recording struct {
 
 	Frames []Frame
 	Colors *color.Catalog
+
+	// Annotations is the annotation track, already mapped onto the playback
+	// timeline. It is an overlay: frames never contain annotation content.
+	Annotations []annotate.Annotation
 
 	Stats Stats
 }

@@ -164,6 +164,48 @@ func TestCmd_Run_Themes(t *testing.T) {
 	}
 }
 
+func TestCmd_Run_Annotations(t *testing.T) {
+	dir := t.TempDir()
+	in := writeRunFile(t, dir, "in.cast", runTestCast)
+	track := writeRunFile(t, dir, "notes.json",
+		`[{"from":"0.15s","to":"0.5s","row":1,"col":0,"rows":1,"cols":3,"text":"red output"}]`)
+
+	out := filepath.Join(dir, "out.svg")
+	cmd := newCmd(in, out, "svg")
+	cmd.Annotate = track
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	data, err := os.ReadFile(out) //nolint:gosec // test temp file
+	if err != nil {
+		t.Fatal(err)
+	}
+	svg := string(data)
+	for _, want := range []string{`class="annh"`, "red output", "@keyframes ann0"} {
+		if !strings.Contains(svg, want) {
+			t.Errorf("exported SVG misses %q", want)
+		}
+	}
+}
+
+func TestCmd_Run_AnnotationErrors(t *testing.T) {
+	dir := t.TempDir()
+	in := writeRunFile(t, dir, "in.cast", runTestCast)
+	reversed := writeRunFile(t, dir, "reversed.json", `[{"from":"2s","to":"1s","row":0,"col":0,"cols":1}]`)
+
+	cmd := newCmd(in, filepath.Join(dir, "o.svg"), "svg")
+	cmd.Annotate = reversed
+	if err := cmd.Run(); err == nil {
+		t.Fatal("a reversed annotation interval should be an error")
+	}
+
+	cmd = newCmd(in, filepath.Join(dir, "o.svg"), "svg")
+	cmd.Annotate = filepath.Join(dir, "missing.json")
+	if err := cmd.Run(); err == nil {
+		t.Fatal("a missing annotation file should be an error")
+	}
+}
+
 func TestCmd_Run_Errors(t *testing.T) {
 	dir := t.TempDir()
 	good := writeRunFile(t, dir, "good.cast", runTestCast)

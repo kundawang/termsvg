@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mrmarble/termsvg/cmd/termsvg/internal/pacing"
+	"github.com/mrmarble/termsvg/internal/annotate"
 	"github.com/mrmarble/termsvg/internal/asciicast"
 	"github.com/mrmarble/termsvg/internal/ir"
 	"github.com/mrmarble/termsvg/internal/progress"
@@ -33,6 +34,7 @@ type Cmd struct {
 	Rows             int    `short:"r" default:"0" help:"Override rows (0 = use original)"`
 	Debug            bool   `short:"d" help:"Enable debug logging"`
 	SystemFonts      bool   `help:"Draw glyphs the embedded fonts lack with installed fonts (GIF and WebM)"`
+	Annotate         string `type:"existingfile" help:"JSON annotation track to draw over the export (SVG only)"`
 	Theme            string `short:"t" help:"Theme name (built-in) or path to theme JSON file"`
 	SVGLayout        string `default:"frames" enum:"frames,bands,regions,scroll,auto" help:"SVG layout: frames, experimental bands/regions/scroll, or measured auto selection"`
 	SVGAnimation     string `default:"css" enum:"css,smil" help:"SVG animation backend (css or experimental smil)"`
@@ -115,12 +117,14 @@ func (cmd *Cmd) processorConfig(
 	idleLimit time.Duration,
 	selectedTheme *theme.Theme,
 	progressCh chan<- progress.Update,
+	annotations []annotate.Annotation,
 ) *ir.ProcessorConfig {
 	cfg := ir.DefaultProcessorConfig()
 	cfg.Speed = cmd.Speed
 	cfg.IdleTimeLimit = idleLimit
 	cfg.Theme = *selectedTheme
 	cfg.ProgressCh = progressCh
+	cfg.Annotations = annotations
 
 	return cfg
 }
@@ -180,6 +184,17 @@ func (cmd *Cmd) Run() error {
 		return err
 	}
 
+	var annotations []annotate.Annotation
+	if cmd.Annotate != "" {
+		annotations, err = annotate.LoadFile(cmd.Annotate)
+		if err != nil {
+			return err
+		}
+		if format != "svg" {
+			fmt.Fprintf(os.Stderr, "Warning: annotations are only drawn in svg output, %s output ignores them\n", format)
+		}
+	}
+
 	if cmd.Cols > 0 {
 		cast.Header.Width = cmd.Cols
 	}
@@ -190,9 +205,15 @@ func (cmd *Cmd) Run() error {
 	selectedTheme := cmd.selectTheme(cast)
 
 	err = progress.Run(func(progressCh chan<- progress.Update) error {
-		rec, err := ir.NewProcessor(cmd.processorConfig(cast.IdleLimit(cmd.MaxIdle), &selectedTheme, progressCh)).Process(cast)
+		rec, err := ir.NewProcessor(cmd.processorConfig(cast.IdleLimit(cmd.MaxIdle), &selectedTheme, progressCh, annotations)).Process(cast)
 		if err != nil {
 			return err
+		}
+
+		var warnings []string
+		rec.Annotations, warnings = annotate.Normalize(rec.Annotations, rec.Width, rec.Height, rec.Duration)
+		for _, warning := range warnings {
+			fmt.Fprintf(os.Stderr, "Warning: %s\n", warning)
 		}
 
 		rdr, err := newRenderer(format, cmd.rendererConfig(&selectedTheme, progressCh), &svgOptions)

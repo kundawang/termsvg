@@ -226,7 +226,7 @@ func TestProcessor_PreprocessEventsIdleTimeCap(t *testing.T) {
 			cast := &asciicast.Cast{Events: tt.events}
 			sourceEvents := append([]asciicast.Event(nil), tt.events...)
 
-			got := NewProcessor(config).preprocessEvents(cast)
+			got, _ := NewProcessor(config).preprocessEvents(cast)
 			if len(got) != len(tt.want) {
 				t.Fatalf("got %d events, want %d", len(got), len(tt.want))
 			}

@@ -1,6 +1,7 @@
 package play
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mrmarble/termsvg/cmd/termsvg/internal/pacing"
+	"github.com/mrmarble/termsvg/internal/annotate"
 	"github.com/mrmarble/termsvg/internal/asciicast"
 )
 
@@ -55,7 +57,7 @@ func play(t *testing.T, speed float64, maxIdle time.Duration) (out string, waite
 	t.Helper()
 	var err error
 	out = captureStdout(t, func() {
-		err = playback(parse(t), speed, maxIdle, func(d time.Duration) { waited += d })
+		err = playback(parse(t), speed, maxIdle, func(d time.Duration) { waited += d }, os.Stdout, nil)
 	})
 	if err != nil {
 		t.Fatalf("playback() error = %v", err)
@@ -164,11 +166,93 @@ func TestPlayback_OnlyOutputEventsArePrinted(t *testing.T) {
 		t.Fatal(err)
 	}
 	var playErr error
-	out := captureStdout(t, func() { playErr = playback(cast, 100, 0, func(time.Duration) {}) })
+	out := captureStdout(t, func() { playErr = playback(cast, 100, 0, func(time.Duration) {}, os.Stdout, nil) })
 	if playErr != nil {
 		t.Fatal(playErr)
 	}
 	if out != "ab" {
 		t.Errorf("output = %q, want %q", out, "ab")
+	}
+}
+
+// playAnnotations replays castText with the given track and a fake sleep,
+// returning everything written to the terminal.
+func playAnnotations(t *testing.T, castText string, annotations []annotate.Annotation) string {
+	t.Helper()
+	cast, err := asciicast.Parse(strings.NewReader(castText))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := playback(cast, 100, 0, func(time.Duration) {}, &buf, annotations); err != nil {
+		t.Fatal(err)
+	}
+	return buf.String()
+}
+
+func TestPlayback_AnnotationOverlay(t *testing.T) {
+	cast := `{"version":2,"width":10,"height":3}
+[0.01,"o","abc"]
+[0.02,"o","def"]
+[0.03,"o","g"]
+`
+	// Highlight cells (0,0)-(1,0) between the first two events, with a label below.
+	out := playAnnotations(t, cast, []annotate.Annotation{
+		{From: 15 * time.Millisecond, To: 25 * time.Millisecond, Row: 0, Col: 0, Rows: 1, Cols: 2, Text: "hi"},
+	})
+
+	// The recording stream is unchanged and in order.
+	if !strings.Contains(out, "abc") || !strings.Contains(out, "def") ||
+		strings.Index(out, "abc") > strings.Index(out, "def") {
+		t.Fatalf("replayed stream broken: %q", out)
+	}
+	// The highlight appears between the two events: cursor to row 1, col 1
+	// (1-based) with reverse video over the recorded cell "a".
+	show := strings.Index(out, "\x1b[1;1H\x1b[0m\x1b[7m")
+	if show < 0 {
+		t.Fatalf("highlight never drawn: %q", out)
+	}
+	if show < strings.Index(out, "abc") || show > strings.Index(out, "def") {
+		t.Errorf("highlight drawn at the wrong moment: %q", out)
+	}
+	// The label is drawn on the row below the highlight, one cell at a time.
+	if !strings.Contains(out, "\x1b[2;1H\x1b[0;7mh") || !strings.Contains(out, "\x1b[2;2H\x1b[0;7mi") {
+		t.Errorf("label missing: %q", out)
+	}
+	// The annotation hides again after the last event: the covered cells are
+	// reprinted from the screen model without reverse video.
+	erase := strings.LastIndex(out, "\x1b[1;1H\x1b[0m")
+	if erase < 0 || erase < strings.Index(out, "def") {
+		t.Errorf("highlight never erased after its interval: %q", out)
+	}
+	// Cursor is saved and restored around every overlay update.
+	if !strings.Contains(out, "\x1b7") || !strings.Contains(out, "\x1b8") {
+		t.Errorf("overlay should not disturb the replayed cursor: %q", out)
+	}
+}
+
+func TestPlayback_AnnotationClampedAfterResize(t *testing.T) {
+	cast := `{"version":2,"width":10,"height":3}
+[0.01,"o","abc"]
+[0.02,"r","4x2"]
+[0.03,"o","x"]
+`
+	// The rectangle reaches past the shrunk 4x2 screen; only on-screen cells
+	// are highlighted.
+	out := playAnnotations(t, cast, []annotate.Annotation{
+		{From: 25 * time.Millisecond, To: 35 * time.Millisecond, Row: 0, Col: 0, Rows: 1, Cols: 8},
+	})
+	if strings.Contains(out, "\x1b[1;5H") {
+		t.Errorf("highlight drawn past the resized 4-col screen: %q", out)
+	}
+	if !strings.Contains(out, "\x1b[1;4H\x1b[0m\x1b[7m") {
+		t.Errorf("highlight missing on the last visible cell: %q", out)
+	}
+}
+
+func TestPlayback_NoAnnotationsNoOverlay(t *testing.T) {
+	out := playAnnotations(t, testCast, nil)
+	if out != "abc" {
+		t.Errorf("output = %q, want the bare recording %q", out, "abc")
 	}
 }
